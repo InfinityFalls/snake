@@ -1,3 +1,14 @@
+"""
+Specification:
+- Has two teams
+- A set of three challenges are generated every 2 minutes
+- First team to complete a challenge will notify opponent to freeze.
+
+Implementation Notes:
+- Challenges are going to be strings and not much else.
+- A message will need to be sent to opponent team, so needs an method to do that
+- Race conditions will need to prevented when completing challenges
+"""
 import asyncio
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -21,7 +32,7 @@ class Challenge:
 class GameState(Enum):
     INITIAL = auto()
     PLAYING = auto()
-    PAUSED = auto()  # Will not be used in initial implementation
+    PAUSED = auto()  # NOTE: Will not be used in initial implementation
     ENDED = auto()
 
 
