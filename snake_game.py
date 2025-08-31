@@ -3,6 +3,7 @@ Specification:
 - Has two teams
 - A set of three challenges are generated every 2 minutes
 - First team to complete a challenge will notify opponent to freeze.
+- Other team team will learn upcoming challenges while they are frozen.
 
 Implementation Notes:
 - Challenges are going to be strings and not much else.
@@ -30,6 +31,11 @@ class Challenge:
     # TODO: Define challenges
     pass
 
+# TODO: Figure out how to store settings in a somewhat sensible way
+class Settings:
+    challenge_interval: int = 120
+    num_challenges: int = 3
+
 
 class GameState(Enum):
     INITIAL = auto()
@@ -39,10 +45,8 @@ class GameState(Enum):
 
 
 class SnakeGame:
-    CHALLENGE_INTERVAL = 120
-    NUM_CHALLENGES = 3
-
-    def __init__(self):
+    def __init__(self, settings: Settings):
+        self._settings = settings
         self._state = GameState.INITIAL
         self._challenge_loop_task = None
         self._challenge_lock = asyncio.Lock()
@@ -66,8 +70,8 @@ class SnakeGame:
 
         raise NotImplementedError
 
-    async def _generate_challenges(self):
-        # TODO: Generate a set of N challenges
+    async def _shift_challenges(self):
+        # TODO: Shift down the next challenge set
         raise NotImplementedError
     
     async def complete_challenge(self, team_id: int, challenge_id: int):
@@ -77,5 +81,5 @@ class SnakeGame:
     async def _challenge_loop(self):
         while True:
             # TODO: change this to a pausable timer (will not be done in initial implementation)
-            await asyncio.sleep(self.CHALLENGE_INTERVAL)
-            await self._generate_challenges()
+            await asyncio.sleep(self._settings.challenge_interval)
+            await self._shift_challenges()
