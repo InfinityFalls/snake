@@ -8,6 +8,8 @@ Implementation Notes:
 - Challenges are going to be strings and not much else.
 - A message will need to be sent to opponent team, so needs an method to do that
 - Race conditions will need to prevented when completing challenges
+- Two teams might claim at the same time
+- A team might claim just when challenges are rerolling!
 """
 import asyncio
 from dataclasses import dataclass
@@ -38,36 +40,42 @@ class GameState(Enum):
 
 class SnakeGame:
     CHALLENGE_INTERVAL = 120
+    NUM_CHALLENGES = 3
 
     def __init__(self):
         self._state = GameState.INITIAL
-        self._challenge_task = None
-        # HACK: Using a lock for everything to avoid any and all race conditions
-        self._game_lock = asyncio.Lock()
+        self._challenge_loop_task = None
+        self._challenge_lock = asyncio.Lock()
 
     @property
-    def is_active(self): return self._state in (
-        GameState.PLAYING, GameState.PAUSED)
+    def is_active(self):
+        return self._state in (GameState.PLAYING, GameState.PAUSED)
 
     def start_game(self):
         if not self._state is GameState.INITIAL:
             raise GameError("Cannot start a game that has not started")
-        self._challenge_task = asyncio.create_task(self._challenge_loop())
+        self._challenge_loop_task = asyncio.create_task(self._challenge_loop())
 
         raise NotImplementedError
 
     def end_game(self):
         if not self._state is not GameState.PLAYING:
             raise GameError("Cannot end a game that is not active")
-        assert self._challenge_task is not None
-        self._challenge_task.cancel()
+        assert self._challenge_loop_task is not None
+        self._challenge_loop_task.cancel()
 
+        raise NotImplementedError
+
+    async def _generate_challenges(self):
+        # TODO: Generate a set of N challenges
+        raise NotImplementedError
+    
+    async def complete_challenge(self, team_id: int, challenge_id: int):
+        # TODO: Mark a challenge as complete
         raise NotImplementedError
 
     async def _challenge_loop(self):
         while True:
-            # TODO: change this to a pausable timer
+            # TODO: change this to a pausable timer (will not be done in initial implementation)
             await asyncio.sleep(self.CHALLENGE_INTERVAL)
-
-            # TODO: generate challenge set
-            raise NotImplementedError
+            await self._generate_challenges()
