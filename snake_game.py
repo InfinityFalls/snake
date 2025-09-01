@@ -14,12 +14,10 @@ Implementation Notes:
 """
 import asyncio
 from collections import deque
-from collections.abc import Coroutine
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 from logging import warning
 from types import FunctionType
-from typing import Optional
 
 
 class GameError(RuntimeError):
@@ -139,7 +137,7 @@ class SnakeGame:
     async def _challenge_loop(self):
         while True:
             # TODO: change this to a pausable timer (will not be done in initial implementation)
-            if self._settings.cycle_length> self._settings.warning_time:
+            if self._settings.cycle_length > self._settings.warning_time:
                 await asyncio.sleep(self._settings.cycle_length - self._settings.warning_time)
                 await self._interface.warning_ping()
                 await asyncio.sleep(self._settings.warning_time)

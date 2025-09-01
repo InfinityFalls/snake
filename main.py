@@ -14,11 +14,13 @@ bot = discord.Bot()
 guild_id = 0
 command_lock = asyncio.Lock()
 
+
 @dataclass
 class Team:
     team_id: int
     thread: Optional[discord.Thread] = None
     members: list[discord.abc.Snowflake] = field(default_factory=list)
+
 
 current_game = None
 general_thread = None
@@ -72,7 +74,7 @@ async def start_game(ctx: discord.ApplicationContext, cycle_length: int = 120, n
             await asyncio.sleep(1)
 
         await current_game.start_game()
-    
+
     raise NotImplementedError("Send out first set of challenges")
 
 
