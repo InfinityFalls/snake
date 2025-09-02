@@ -1,10 +1,15 @@
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Optional
-from guild_data import GuildInfo
 from snake_game import Challenge, SnakeGame, Settings, InterfaceMethods, GameError
+from dotenv import load_dotenv
+import os
 
 import discord
+
+
+load_dotenv()
 
 
 @dataclass
@@ -17,29 +22,38 @@ class Team:
 
 class ChallengeView(discord.ui.View):
     def __init__(self, game: "DiscordGame", challenge_id: int, cycle_id: int, timeout: int):
+        super().__init__(timeout=timeout, disable_on_timeout=True)
         self._game = game
         self.challenge_id = challenge_id
         self.cycle_id = cycle_id
-        self.timeout = timeout
 
     @discord.ui.button(label="Complete Challenge", style=discord.ButtonStyle.green)
     async def complete_challenge(self, _: discord.ui.Button, interaction: discord.Interaction):
         await self._game._complete_challenge(interaction, self.challenge_id, self.cycle_id)
+        
+    async def on_timeout(self) -> None:
+        await self.disable_view()
+    
+    async def disable_view(self) -> None:
+        assert self.message is not None
+        self.disable_all_items()
+        await self.message.edit(content=self.message.content, view=self)
 
 
 class DiscordGame:
-    def __init__(self, game_id: int, guild_info: GuildInfo) -> None:
+    def __init__(self, thread: discord.Thread, game_id: int, team_roles: Sequence[discord.Role]) -> None:
         self._game_id = game_id  # NOTE: Currently unused
-        self._general_thread: Optional[discord.Thread] = None
+        self._general_thread: discord.Thread = thread
         self._challenge_countdown_done = asyncio.Event()
+        self._challenge_countdown_done.set()
 
         self._challenge_view_lock = asyncio.Lock()
         self._active_challenge_views: list[ChallengeView] = []
 
         self._pre_game_lock = asyncio.Lock()
         self._players = {}
-        self._teams = [Team(0, guild_info.team_roles[0]),
-                       Team(1, guild_info.team_roles[1])]
+        self._teams = [Team(0, team_roles[0]),
+                       Team(1, team_roles[1])]
         self._settings = Settings()
 
         self._interface = InterfaceMethods(
@@ -50,22 +64,33 @@ class DiscordGame:
                                interface=self._interface)
 
     async def _create_threads(self, ctx: discord.ApplicationContext):
-        self._general_thread = await ctx.channel.create_thread(name="Snake Chat", invitable=False)
-        assert self._general_thread is not None
+        assert isinstance(ctx.channel, discord.Thread)
+        assert isinstance(ctx.channel.parent, discord.TextChannel)
         for team in self._teams:
-            team.thread = await ctx.channel.create_thread(name=f"Snake Team {team.id + 1}", invitable=False)
+            team.thread = await ctx.channel.parent.create_thread(name=f"Snake Team {team.id + 1}", invitable=False)
             assert team.thread is not None
             for user in team.members:
                 await self._general_thread.add_user(user)
                 await team.thread.add_user(user)
 
-    async def _countdown(self, message: str, time: int):
-        assert self._general_thread is not None
-        await self._general_thread.send(f"## {message} in {time}...")
+    async def _countdown(self, message_str: str, time: int):
+        if self._game.has_ended:
+            return
+        
+        message = await self._general_thread.send(f"## {message_str} in {time}...")
         for i in range(time - 1, 0, -1):
             await asyncio.sleep(1)
-            await self._general_thread.send(f"{i}...")
+            
+            if self._game.has_ended:
+                await message.delete()
+                return
+            
+            await message.edit(content=f"## {message_str} in {i}...")
         await asyncio.sleep(1)
+        await message.delete()
+        
+    def _is_player(self, user: discord.abc.Snowflake):
+        return user.id in self._players
 
     async def join_game(self, ctx: discord.ApplicationContext, team_id: int):
         async with self._pre_game_lock:
@@ -94,15 +119,18 @@ class DiscordGame:
                 await ctx.respond("The game has already started", ephemeral=True)
                 return
             await self._game.enter_starting_state()
+        
         await ctx.respond("Starting game...", ephemeral=True)
         await self._create_threads(ctx)
         await self._countdown("Game starts", 5)
         await self._game.start_game()
+        await self._broadcast_challenges(0)
 
-    def _disable_views(self):
+    async def _disable_views(self):
         assert self._challenge_view_lock.locked()
+        # TODO: Make these happen at the same time
         for view in self._active_challenge_views:
-            view.disable_all_items()
+            await view.disable_view()
         self._active_challenge_views.clear()
 
     async def end_game(self, ctx: discord.ApplicationContext):
@@ -110,9 +138,8 @@ class DiscordGame:
         await self._game.end_game()
 
         async with self._challenge_view_lock:
-            self._disable_views()
+            await self._disable_views()
 
-        assert self._general_thread is not None
         await self._general_thread.send("# Game Over!")
 
     async def settings(self, ctx: discord.ApplicationContext, setting_name: str, new_val: Any):
@@ -123,14 +150,18 @@ class DiscordGame:
             raise NotImplementedError("Settings command not implemented yet")
 
     async def _complete_challenge(self, interaction: discord.Interaction, challenge_id: int, cycle_id: int):
+        assert interaction.user is not None
+        if not self._is_player(interaction.user):
+            await interaction.respond("You are not playing in this game. You cannot complete the challenge.", ephemeral=True)
+            return
+        
         async with self._challenge_view_lock:
-            assert self._general_thread is not None
             try:
                 challenge, next_challenges = await self._game.complete_challenge(challenge_id, cycle_id)
             except GameError as e:
                 await interaction.response.send_message(f"{e}", ephemeral=True)
                 return
-            self._disable_views()
+            await self._disable_views()
 
         assert interaction.user is not None
         completed_team = self._get_team(interaction.user)
@@ -138,27 +169,25 @@ class DiscordGame:
             self._teams) if i != completed_team.id]
 
         # TODO: Make all of these happen at the same time
-        await interaction.respond(f"<@&{completed_team.team_role.id}> has completed the challenge: {challenge.title}!\nAll other teams have been frozen!")
+        await interaction.respond(f"{completed_team.team_role.mention} has completed the challenge: {challenge.title}!\nAll other teams have been frozen!")
         for team in victim_teams:
             assert team.thread is not None
-            await team.thread.send(f"<@&{team.team_role.id}> You have been frozen!\nThe upcoming challenges are:")
+            await team.thread.send(f"{team.team_role.mention} You have been frozen!\nThe upcoming challenges are:")
             for c in next_challenges:
                 await team.thread.send(format_challenge(c))
 
     async def _broadcast_challenges(self, cycle_id: int):
-        assert self._general_thread is not None
-        
         await self._challenge_countdown_done.wait()
-        async with self._challenge_view_lock:
+        async with self._challenge_view_lock, self._general_thread.typing():
             assert self._game.has_started
             if not self._game.is_playing:
                 return
-            self._disable_views()
+            await self._disable_views()
             challenges = await self._game.get_current_challenges()
-            
-            
+
+            await self._general_thread.send("## Challenges")
             for i, c in enumerate(challenges):
-                view = ChallengeView(self, i, cycle_id, self._settings.cycle_length + 5)
+                view = ChallengeView(self, i, cycle_id, self._settings.cycle_length + 10)
                 self._active_challenge_views.append(view)
                 await self._general_thread.send(format_challenge(c), view=view)
 
@@ -171,3 +200,62 @@ class DiscordGame:
 
 def format_challenge(challenge: Challenge) -> str:
     return f"### {challenge.title}\n{challenge.description}"
+
+
+GUILD_IDS = [1332689704361001001]  # NOTE: Currently only supports one guild at a time
+TEAM_ROLES_IDS = [1412368130054950944, 1412368173784891484]
+
+
+# TODO: Make this work with multiple games
+class GameManager:
+    def __init__(self) -> None:
+        self._game_threads = {}
+
+    async def create_game(self, ctx: discord.ApplicationContext):
+        if len(self._game_threads) >= 1:
+            await ctx.respond("Oops, this game only supports one at the time atm.", ephemeral=True)
+            return
+        
+        await ctx.respond("Creating game...", ephemeral=True)
+        
+        thread = await ctx.channel.create_thread(name="Snake General", type=discord.ChannelType.public_thread)
+        game = DiscordGame(thread, 0, [ctx.guild.get_role(i) for i in TEAM_ROLES_IDS])
+        self._game_threads[thread.id] = game
+
+    async def end_game(self, ctx: discord.ApplicationContext):
+        game = self._game_threads.pop(ctx.channel.id, None)
+        if game is None:
+            await ctx.respond("No game has been found", ephemeral=True)
+            return
+        await game.end_game(ctx)
+
+    # TODO: Change this to a decorator instead of a function
+    def __getitem__(self, thread_id: int) -> DiscordGame:
+        return self._game_threads[thread_id]
+
+game_manager = GameManager()
+bot = discord.Bot()
+
+
+@bot.command()
+async def create_game(ctx: discord.ApplicationContext):
+    await game_manager.create_game(ctx)
+
+
+@bot.command()
+async def start_game(ctx: discord.ApplicationContext):
+    game = game_manager[ctx.channel.id]
+    await game.start_game(ctx)
+
+@bot.command()
+async def join_game(ctx: discord.ApplicationContext, team_id: int):
+    game = game_manager[ctx.channel.id]
+    await game.join_game(ctx, team_id)
+
+
+@bot.command()
+async def end_game(ctx: discord.ApplicationContext):
+    await game_manager.end_game(ctx)
+
+if __name__ == "__main__":
+    bot.run(os.environ["DISCORD_TOKEN"])

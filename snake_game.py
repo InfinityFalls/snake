@@ -2,7 +2,7 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum, auto
-from logging import warning
+from warnings import warn
 from types import FunctionType, MethodType
 
 
@@ -10,6 +10,7 @@ class GameError(RuntimeError):
     pass
 
 
+@dataclass
 class Challenge:
     title: str
     description: str
@@ -17,13 +18,13 @@ class Challenge:
 # TODO: Figure out how to store settings in a somewhat sensible way
 @dataclass
 class Settings:
-    cycle_length: int = 10  # TODO: Change to 120
+    cycle_length: int = 30  # TODO: Change to 120
     warning_time: int = 5
     num_challenges: int = 3
 
 
 async def _no_method_warning(*_, **__):
-    warning("A method has not been defined")
+    warn("A method has not been defined")
 
 
 @dataclass
@@ -62,11 +63,16 @@ class SnakeGame:
         return self._state is not GameState.INITIAL
 
     @property
-    def is_playing(self): return self._state is GameState.PLAYING
+    def is_playing(self):
+        return self._state is GameState.PLAYING
 
     @property
     def is_active(self):
         return self._state in (GameState.PLAYING, GameState.PAUSED)
+    
+    @property
+    def has_ended(self):
+        return self._state is GameState.ENDED
 
     async def get_current_challenges(self):
         async with self._challenge_lock:
@@ -88,17 +94,17 @@ class SnakeGame:
                 raise GameError("Cannot enter starting state from a state other than INITIAL")
             self._state = GameState.STARTING
 
-    async def start_game(self) -> list[Challenge]:
+    async def start_game(self):
         async with self._state_lock:
-            if not self._state not in (GameState.INITIAL, GameState.STARTING):
+            if self._state not in (GameState.INITIAL, GameState.STARTING):
                 raise GameError("Cannot start a game that has not started")
             self._challenge_loop_task = asyncio.create_task(
                 self._challenge_loop())
-            return self._challenge_queue[0]
+            self._state = GameState.PLAYING
 
     async def end_game(self):
         async with self._state_lock:
-            if not self._state is not GameState.PLAYING:
+            if self._state is not GameState.PLAYING:
                 raise GameError("Cannot end a game that is not active")
             assert self._challenge_loop_task is not None
             self._challenge_loop_task.cancel()
@@ -125,7 +131,8 @@ class SnakeGame:
     @staticmethod
     def _generate_challenges() -> list[Challenge]:
         # TODO: Generate a challenge cycle
-        raise NotImplementedError
+        warn("Using dummy challenges")
+        return [Challenge(f"Challenge {i + 1}", "Do something lol") for i in range(3)]
 
     async def _shift_challenges(self):
         async with self._challenge_lock:
