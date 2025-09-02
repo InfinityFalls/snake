@@ -17,7 +17,11 @@ class Team:
     id: int
     team_role: discord.Role
     thread: Optional[discord.Thread] = None
-    members: list[discord.abc.Snowflake] = field(default_factory=list)
+    members: list[discord.Member] = field(default_factory=list)
+    
+    async def remove_roles(self):
+        for member in self.members:
+            await member.remove_roles(self.team_role)
 
 
 class ChallengeView(discord.ui.View):
@@ -105,10 +109,12 @@ class DiscordGame:
             if not 0 <= true_team_id < len(self._teams):
                 await ctx.respond(f"Invalid team ID", ephemeral=True)
                 return
+            team = self._teams[true_team_id]
 
             self._players[ctx.user.id] = true_team_id
-            self._teams[true_team_id].members.append(ctx.user)
-            await ctx.respond(f"You have joined Team {team_id}", ephemral=True)
+            team.members.append(ctx.user)
+            await ctx.user.add_roles(self._teams[true_team_id].team_role)
+            await ctx.respond(f"You have joined Team {team_id}", ephemeral=True)
 
     def _get_team(self, user: discord.abc.Snowflake) -> Team:
         return self._teams[self._players[user.id]]
@@ -141,6 +147,9 @@ class DiscordGame:
             await self._disable_views()
 
         await self._general_thread.send("# Game Over!")
+        
+        for team in self._teams:
+            await team.remove_roles()
 
     async def settings(self, ctx: discord.ApplicationContext, setting_name: str, new_val: Any):
         async with self._pre_game_lock:
@@ -172,7 +181,7 @@ class DiscordGame:
         await interaction.respond(f"{completed_team.team_role.mention} has completed the challenge: {challenge.title}!\nAll other teams have been frozen!")
         for team in victim_teams:
             assert team.thread is not None
-            await team.thread.send(f"{team.team_role.mention} You have been frozen!\nThe upcoming challenges are:")
+            await team.thread.send(f"## {team.team_role.mention} You have been frozen!\nThe upcoming challenges are:")
             for c in next_challenges:
                 await team.thread.send(format_challenge(c))
 
@@ -202,8 +211,8 @@ def format_challenge(challenge: Challenge) -> str:
     return f"### {challenge.title}\n{challenge.description}"
 
 
-GUILD_IDS = [1332689704361001001]  # NOTE: Currently only supports one guild at a time
-TEAM_ROLES_IDS = [1412368130054950944, 1412368173784891484]
+GUILD_IDS = [1412516526447268075]  # NOTE: Currently only supports one guild at a time
+TEAM_ROLES_IDS = [1412516839711576144, 1412516873534308446]
 
 
 # TODO: Make this work with multiple games
