@@ -79,6 +79,10 @@ class SnakeGame:
         self._challenge_loop_task = None
 
     @property
+    def has_started(self):
+        return self._state is not GameState.INITIAL
+
+    @property
     def is_active(self):
         return self._state in (GameState.PLAYING, GameState.PAUSED)
 
@@ -108,6 +112,8 @@ class SnakeGame:
 
     async def complete_challenge(self, challenge_id: int, set_id: int) -> tuple[Challenge, list[Challenge]]:
         async with self._challenge_lock:
+            if self._state is not GameState.PLAYING:
+                raise GameError("Game is currently not in progress")
             if self._current_set_id != set_id:
                 raise GameError(
                     "Cannot complete a challenge from an expired set")
@@ -132,15 +138,15 @@ class SnakeGame:
             self._challenge_queue.append(self._generate_challenges())
             self._current_set_id += 1
             self._set_complete = False
-        await self._interface.broadcast_challenges()
 
     async def _challenge_loop(self):
         while True:
             # TODO: change this to a pausable timer (will not be done in initial implementation)
             if self._settings.cycle_length > self._settings.warning_time:
                 await asyncio.sleep(self._settings.cycle_length - self._settings.warning_time)
-                await self._interface.warning_ping()
+                asyncio.create_task(self._interface.warning_ping())
                 await asyncio.sleep(self._settings.warning_time)
             else:
                 await asyncio.sleep(self._settings.cycle_length)
             await self._shift_challenges()
+            await self._interface.broadcast_challenges()
