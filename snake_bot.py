@@ -20,8 +20,9 @@ class Team:
     members: list[discord.Member] = field(default_factory=list)
     
     async def remove_roles(self):
-        for member in self.members:
-            await member.remove_roles(self.team_role)
+        async with asyncio.TaskGroup() as tg:
+            for member in self.members:
+                tg.create_task(member.remove_roles(self.team_role))
 
 
 class ChallengeView(discord.ui.View):
@@ -67,15 +68,22 @@ class DiscordGame:
         self._game = SnakeGame(settings=self._settings,
                                interface=self._interface)
 
-    async def _create_threads(self, ctx: discord.ApplicationContext):
+    async def _create_team_thread(self, ctx: discord.ApplicationContext, team: Team):
         assert isinstance(ctx.channel, discord.Thread)
         assert isinstance(ctx.channel.parent, discord.TextChannel)
-        for team in self._teams:
-            team.thread = await ctx.channel.parent.create_thread(name=f"Snake Team {team.id + 1}", invitable=False)
-            assert team.thread is not None
+        
+        team.thread = await ctx.channel.parent.create_thread(name=f"Snake Team {team.id + 1}", invitable=False)
+        assert team.thread is not None
+        
+        async with asyncio.TaskGroup() as tg:
             for user in team.members:
-                await self._general_thread.add_user(user)
-                await team.thread.add_user(user)
+                tg.create_task(self._general_thread.add_user(user))
+                tg.create_task(team.thread.add_user(user))
+
+    async def _create_threads(self, ctx: discord.ApplicationContext):
+        async with asyncio.TaskGroup() as tg:
+            for team in self._teams:
+                tg.create_task(self._create_team_thread(ctx, team))
 
     async def _countdown(self, message_str: str, time: int):
         if self._game.has_ended:
@@ -97,6 +105,8 @@ class DiscordGame:
         return user.id in self._players
 
     async def join_game(self, ctx: discord.ApplicationContext, team_id: int):
+        assert isinstance(ctx.user, discord.Member)
+        
         async with self._pre_game_lock:
             if self._game.has_started:
                 await ctx.respond("The game has already started", ephemeral=True)
@@ -127,29 +137,34 @@ class DiscordGame:
             await self._game.enter_starting_state()
         
         await ctx.respond("Starting game...", ephemeral=True)
-        await self._create_threads(ctx)
-        await self._countdown("Game starts", 5)
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(self._create_threads(ctx))
+            tg.create_task(self._countdown("Game starts", 5))
+        
         await self._game.start_game()
         await self._broadcast_challenges(0)
 
     async def _disable_views(self):
         assert self._challenge_view_lock.locked()
-        # TODO: Make these happen at the same time
-        for view in self._active_challenge_views:
-            await view.disable_view()
+        async with asyncio.TaskGroup() as tg:
+            for view in self._active_challenge_views:
+                tg.create_task(view.disable_view())
         self._active_challenge_views.clear()
 
+
     async def end_game(self, ctx: discord.ApplicationContext):
-        await self._game.end_game()
-
-        await ctx.respond("Ending game...", ephemeral=True)
-        async with self._challenge_view_lock:
-            await self._disable_views()
-
-        await self._general_thread.send("# Game Over!")
+        async def locking_disable_views():
+            async with self._challenge_view_lock:
+                await self._disable_views()
         
-        for team in self._teams:
-            await team.remove_roles()
+        await self._game.end_game()
+        await ctx.respond("Ending game...", ephemeral=True)
+
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(locking_disable_views())
+            tg.create_task(self._general_thread.send("# Game Over!"))
+            for team in self._teams:
+                tg.create_task(team.remove_roles())
 
     async def settings(self, ctx: discord.ApplicationContext, setting_name: str, new_val: Any):
         async with self._pre_game_lock:
@@ -157,6 +172,12 @@ class DiscordGame:
                 await ctx.respond("Cannot change settings for a in-progress game", ephemeral=True)
                 return
             raise NotImplementedError("Settings command not implemented yet")
+
+    async def _send_freeze(self, team: Team, next_challenges: list[Challenge]):
+        assert team.thread is not None
+        await team.thread.send(f"## {team.team_role.mention} You have been frozen!\nThe upcoming challenges are:")
+        for c in next_challenges:
+            await team.thread.send(format_challenge(c))
 
     async def _complete_challenge(self, interaction: discord.Interaction, challenge_id: int, cycle_id: int):
         assert interaction.user is not None
@@ -170,20 +191,17 @@ class DiscordGame:
             except GameError as e:
                 await interaction.response.send_message(f"{e}", ephemeral=True)
                 return
-            await self._disable_views()
+            else:
+                await self._disable_views()
 
-        assert interaction.user is not None
         completed_team = self._get_team(interaction.user)
         victim_teams = [v for i, v in enumerate(
             self._teams) if i != completed_team.id]
 
-        # TODO: Make all of these happen at the same time
-        await interaction.respond(f"{completed_team.team_role.mention} has completed the challenge: {challenge.title}!\nAll other teams have been frozen!")
-        for team in victim_teams:
-            assert team.thread is not None
-            await team.thread.send(f"## {team.team_role.mention} You have been frozen!\nThe upcoming challenges are:")
-            for c in next_challenges:
-                await team.thread.send(format_challenge(c))
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(interaction.respond(f"{completed_team.team_role.mention} has completed the challenge: {challenge.title}!\nAll other teams have been frozen!"))
+            for team in victim_teams:
+                tg.create_task(self._send_freeze(team, next_challenges))
 
     async def _broadcast_challenges(self, cycle_id: int):
         await self._challenge_countdown_done.wait()
@@ -191,8 +209,10 @@ class DiscordGame:
             assert self._game.has_started
             if not self._game.is_playing:
                 return
-            await self._disable_views()
-            challenges = await self._game.get_current_challenges()
+            
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(self._disable_views())
+                challenges = await tg.create_task(self._game.get_current_challenges())
 
             await self._general_thread.send("## Challenges")
             for i, c in enumerate(challenges):
@@ -216,6 +236,7 @@ TEAM_ROLES_IDS = [1412516839711576144, 1412516873534308446]
 
 
 # TODO: Make this work with multiple games
+# TODO: Make this work with multiple threads per game
 class GameManager:
     def __init__(self) -> None:
         self._game_threads = {}

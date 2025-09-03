@@ -74,7 +74,7 @@ class SnakeGame:
     def has_ended(self):
         return self._state is GameState.ENDED
 
-    async def get_current_challenges(self):
+    async def get_current_challenges(self) -> list[Challenge]:
         async with self._challenge_lock:
             return self._challenge_queue[0]
 
