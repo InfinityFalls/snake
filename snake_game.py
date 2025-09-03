@@ -1,9 +1,10 @@
 import asyncio
 from collections import deque
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Any, Awaitable
 from warnings import warn
-from types import FunctionType, MethodType
 
 
 class GameError(RuntimeError):
@@ -29,8 +30,8 @@ async def _no_method_warning(*_, **__):
 
 @dataclass
 class InterfaceMethods:
-    broadcast_challenges: FunctionType | MethodType = _no_method_warning
-    warning_ping: FunctionType | MethodType = _no_method_warning
+    broadcast_challenges: Callable[[int], Coroutine[Any, Any, None]] = _no_method_warning
+    warning_ping: Callable[[], Coroutine[Any, Any, None]] = _no_method_warning
 
 
 class GameState(Enum):
@@ -50,8 +51,6 @@ class SnakeGame:
         self._state_lock = asyncio.Lock()
 
         self._challenge_queue = deque(maxlen=2)
-        self._challenge_queue.append(self._generate_challenges())
-        self._challenge_queue.append(self._generate_challenges())
         self._challenge_lock = asyncio.Lock()
         self._cycle_id = 0
         self._set_complete = False
@@ -98,6 +97,10 @@ class SnakeGame:
         async with self._state_lock:
             if self._state not in (GameState.INITIAL, GameState.STARTING):
                 raise GameError("Cannot start a game that has not started")
+            
+            self._challenge_queue.append(self._generate_challenges())
+            self._challenge_queue.append(self._generate_challenges())
+            
             self._challenge_loop_task = asyncio.create_task(
                 self._challenge_loop())
             self._state = GameState.PLAYING

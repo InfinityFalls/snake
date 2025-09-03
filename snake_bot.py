@@ -1,7 +1,9 @@
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Optional
+import functools
+import inspect
+from typing import Any, Awaitable, Optional
 from snake_game import Challenge, SnakeGame, Settings, InterfaceMethods, GameError
 from dotenv import load_dotenv
 import os
@@ -26,7 +28,7 @@ class Team:
 
 
 class ChallengeView(discord.ui.View):
-    def __init__(self, game: "DiscordGame", challenge_id: int, cycle_id: int, timeout: int):
+    def __init__(self, game: "DiscordSnakeGame", challenge_id: int, cycle_id: int, timeout: int):
         super().__init__(timeout=timeout, disable_on_timeout=True)
         self._game = game
         self.challenge_id = challenge_id
@@ -45,7 +47,7 @@ class ChallengeView(discord.ui.View):
         await self.message.edit(content=self.message.content, view=self)
 
 
-class DiscordGame:
+class DiscordSnakeGame:
     def __init__(self, thread: discord.Thread, game_id: int, team_roles: Sequence[discord.Role]) -> None:
         self._game_id = game_id  # NOTE: Currently unused
         self._general_thread: discord.Thread = thread
@@ -131,16 +133,17 @@ class DiscordGame:
 
     async def start_game(self, ctx: discord.ApplicationContext):
         async with self._pre_game_lock:
+            if len(self._players) < 1:
+                await ctx.respond("You need at least one player in order to start the game.", ephemeral=True)
+                return
             if self._game.has_started:
                 await ctx.respond("The game has already started", ephemeral=True)
                 return
             await self._game.enter_starting_state()
         
         await ctx.respond("Starting game...", ephemeral=True)
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(self._create_threads(ctx))
-            tg.create_task(self._countdown("Game starts", 5))
-        
+        await self._create_threads(ctx)
+        await self._countdown("Game starts", 5)
         await self._game.start_game()
         await self._broadcast_challenges(0)
 
@@ -166,12 +169,37 @@ class DiscordGame:
             for team in self._teams:
                 tg.create_task(team.remove_roles())
 
-    async def settings(self, ctx: discord.ApplicationContext, setting_name: str, new_val: Any):
+    async def set_setting(self, ctx: discord.ApplicationContext, setting_name: str, new_val: Any):
         async with self._pre_game_lock:
             if self._game.has_started:
                 await ctx.respond("Cannot change settings for a in-progress game", ephemeral=True)
                 return
-            raise NotImplementedError("Settings command not implemented yet")
+            
+            match setting_name:
+                case "num_challenges":
+                    if not 1 <= new_val <= 5:
+                        await ctx.respond("**Error:** num_challenges must be between 1 and 5", ephemeral=True)
+                        return
+                    self._settings.num_challenges = new_val
+                    await ctx.respond(f"num_challenges has been set to {new_val}")
+                case "cycle_length":
+                    if new_val < 30:
+                        await ctx.respond("**Error:** cycle_length must be greater than 30")
+                        return
+                    self._settings.cycle_length = new_val
+                    await ctx.respond(f"cycle_length has been set to {new_val}")
+                case _:
+                    raise GameError("Unknown setting")
+                    
+    async def get_setting(self, setting_name: str):
+        async with self._pre_game_lock:
+            match setting_name:
+                case "num_challenges":
+                    return self._settings.num_challenges
+                case "cycle_length":
+                    return self._settings.cycle_length
+                case _:
+                    raise GameError("Unknown setting")
 
     async def _send_freeze(self, team: Team, next_challenges: list[Challenge]):
         assert team.thread is not None
@@ -232,12 +260,14 @@ def format_challenge(challenge: Challenge) -> str:
 
 
 GUILD_IDS = [1412516526447268075]  # NOTE: Currently only supports one guild at a time
-TEAM_ROLES_IDS = [1412516839711576144, 1412516873534308446]
+TEAM_ROLES_IDS = [1412516839711576144, 1412516873534308446]  # NOTE: Currently only supports two team roles
 
 
 # TODO: Make this work with multiple games
 # TODO: Make this work with multiple threads per game
 class GameManager:
+    _game_threads: dict[int, DiscordSnakeGame]
+    
     def __init__(self) -> None:
         self._game_threads = {}
 
@@ -252,7 +282,7 @@ class GameManager:
         await ctx.respond("Creating game...", ephemeral=True)
         
         thread = await ctx.channel.create_thread(name="Snake General", type=discord.ChannelType.public_thread)
-        game = DiscordGame(thread, 0, [ctx.guild.get_role(i) for i in TEAM_ROLES_IDS])
+        game = DiscordSnakeGame(thread, 0, [ctx.guild.get_role(i) for i in TEAM_ROLES_IDS])
         self._game_threads[thread.id] = game
 
     async def end_game(self, ctx: discord.ApplicationContext):
@@ -267,33 +297,70 @@ class GameManager:
         else:
             del self._game_threads[ctx.channel.id]
 
-    # TODO: Change this to a decorator instead of a function
-    def __getitem__(self, thread_id: int) -> DiscordGame:
-        return self._game_threads[thread_id]
+    def game_command(self, f: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+        @functools.wraps(f)
+        async def magic(ctx: discord.ApplicationContext, *args, **kwargs):
+            try:
+                game = self._game_threads[ctx.channel.id]
+            except KeyError:
+                await ctx.respond("This command need to be ran in the general thread for the game.")
+            else:
+                await f(ctx, game, *args, **kwargs)
+        
+        # Change parameters of the coroutine to make it work with pycord
+        sig = inspect.signature(magic)
+        params = list(sig.parameters.values())
+        del params[1]
+        setattr(magic, "__signature__", sig.replace(parameters=params))
+        
+        return magic
+                
 
 game_manager = GameManager()
 bot = discord.Bot()
 
 
-@bot.command()
+@bot.command(guild_ids=GUILD_IDS)
 async def create_game(ctx: discord.ApplicationContext):
     await game_manager.create_game(ctx)
 
 
-@bot.command()
-async def start_game(ctx: discord.ApplicationContext):
-    game = game_manager[ctx.channel.id]
+@bot.command(guild_ids=GUILD_IDS)
+@game_manager.game_command
+async def start_game(ctx: discord.ApplicationContext, game: DiscordSnakeGame):
     await game.start_game(ctx)
 
-@bot.command()
-async def join_game(ctx: discord.ApplicationContext, team_id: int):
-    game = game_manager[ctx.channel.id]
+@bot.command(guild_ids=GUILD_IDS)
+@game_manager.game_command
+async def join_game(ctx: discord.ApplicationContext, game: DiscordSnakeGame, team_id: int):
     await game.join_game(ctx, team_id)
 
 
-@bot.command()
+@bot.command(guild_ids=GUILD_IDS)
 async def end_game(ctx: discord.ApplicationContext):
     await game_manager.end_game(ctx)
+
+
+settings = bot.create_group("settings")
+
+@settings.command()
+@game_manager.game_command
+async def num_challenges(ctx: discord.ApplicationContext, game: DiscordSnakeGame, new_val: Optional[int] = None):
+    if new_val is None:
+        val = await game.get_setting("num_challenges")
+        await ctx.respond(f"num_challenges is set to {val}")
+    else:
+        await game.set_setting(ctx, "num_challenges", new_val)
+
+@settings.command()
+@game_manager.game_command
+async def cycle_length(ctx: discord.ApplicationContext, game: DiscordSnakeGame, new_val: Optional[int] = None):
+    if new_val is None:
+        val = await game.get_setting("cycle_length")
+        await ctx.respond(f"cycle_length is set to {val}")
+    else:
+        await game.set_setting(ctx, "cycle_length", new_val)
+
 
 if __name__ == "__main__":
     bot.run(os.environ["DISCORD_TOKEN"])
