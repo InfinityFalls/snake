@@ -96,8 +96,8 @@ class DiscordSnakeGame:
             message_task = tg.create_task(
                 self._general_thread.send(
                     f"## {message_str} in {time}...\n-# ||{''.join([i.team_role.mention for i in self._teams])}||"
-                    )
                 )
+            )
         message = await message_task
 
         for i in range(time - 1, 0, -1):
@@ -163,6 +163,10 @@ class DiscordSnakeGame:
         self._active_challenge_views.clear()
 
     async def end_game(self, ctx: discord.ApplicationContext):
+        if not self._game.is_active:
+            await ctx.respond("Cannot end a game that is not active", ephemeral=True)
+            return
+        
         async def locking_disable_views():
             async with self._challenge_view_lock:
                 await self._disable_views()
@@ -288,7 +292,7 @@ class GameManager:
 
     async def create_game(self, ctx: discord.ApplicationContext):
         if isinstance(ctx.channel, discord.Thread):
-            await ctx.respond("Cannot create a Game in a thread")
+            await ctx.respond("Cannot create a game in a thread", ephemeral=True)
             return
         if len(self._game_threads) >= 1:
             await ctx.respond("Oops, this game only supports one at the time atm.", ephemeral=True)
@@ -309,7 +313,7 @@ class GameManager:
         try:
             await game.end_game(ctx)
         except GameError as e:
-            await ctx.respond(f"{e}")
+            await ctx.respond(f"**Error:** {e}", ephemeral=True)
         else:
             del self._game_threads[ctx.channel.id]
 
@@ -366,7 +370,7 @@ settings = bot.create_group("settings")
 async def num_challenges(ctx: discord.ApplicationContext, game: DiscordSnakeGame, new_val: Optional[int] = None):
     if new_val is None:
         val = await game.get_setting("num_challenges")
-        await ctx.respond(f"num_challenges is set to {val}")
+        await ctx.respond(f"num_challenges is set to {val}", ephemeral=True)
     else:
         await game.set_setting(ctx, "num_challenges", new_val)
 
@@ -376,7 +380,7 @@ async def num_challenges(ctx: discord.ApplicationContext, game: DiscordSnakeGame
 async def cycle_length(ctx: discord.ApplicationContext, game: DiscordSnakeGame, new_val: Optional[int] = None):
     if new_val is None:
         val = await game.get_setting("cycle_length")
-        await ctx.respond(f"cycle_length is set to {val}")
+        await ctx.respond(f"cycle_length is set to {val}", ephemeral=True)
     else:
         await game.set_setting(ctx, "cycle_length", new_val)
 
