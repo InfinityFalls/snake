@@ -140,9 +140,9 @@ class DiscordGame:
         self._active_challenge_views.clear()
 
     async def end_game(self, ctx: discord.ApplicationContext):
-        await ctx.respond("Ending game...", ephemeral=True)
         await self._game.end_game()
 
+        await ctx.respond("Ending game...", ephemeral=True)
         async with self._challenge_view_lock:
             await self._disable_views()
 
@@ -221,6 +221,9 @@ class GameManager:
         self._game_threads = {}
 
     async def create_game(self, ctx: discord.ApplicationContext):
+        if isinstance(ctx.channel, discord.Thread):
+            await ctx.respond("Cannot create a Game in a thread")
+            return
         if len(self._game_threads) >= 1:
             await ctx.respond("Oops, this game only supports one at the time atm.", ephemeral=True)
             return
@@ -232,11 +235,16 @@ class GameManager:
         self._game_threads[thread.id] = game
 
     async def end_game(self, ctx: discord.ApplicationContext):
-        game = self._game_threads.pop(ctx.channel.id, None)
+        game = self._game_threads[ctx.channel.id]
         if game is None:
             await ctx.respond("No game has been found", ephemeral=True)
             return
-        await game.end_game(ctx)
+        try:
+            await game.end_game(ctx)
+        except GameError as e:
+            await ctx.respond(f"{e}")
+        else:
+            del self._game_threads[ctx.channel.id]
 
     # TODO: Change this to a decorator instead of a function
     def __getitem__(self, thread_id: int) -> DiscordGame:

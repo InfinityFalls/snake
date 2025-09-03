@@ -128,11 +128,10 @@ class SnakeGame:
             self._set_complete = True
             return completed_challenge, next_challenges
 
-    @staticmethod
-    def _generate_challenges() -> list[Challenge]:
+    def _generate_challenges(self) -> list[Challenge]:
         # TODO: Generate a challenge cycle
         warn("Using dummy challenges")
-        return [Challenge(f"Challenge {i + 1}", "Do something lol") for i in range(3)]
+        return [Challenge(f"Challenge {i + 1}", "Do something lol") for i in range(self._settings.num_challenges)]
 
     async def _shift_challenges(self):
         async with self._challenge_lock:
