@@ -353,6 +353,7 @@ async def start_game(ctx: discord.ApplicationContext, game: DiscordSnakeGame):
 
 @bot.command(guild_ids=GUILD_IDS)
 @game_manager.game_command
+@discord.option("team_id", int, choices=[1, 2])
 async def join_game(ctx: discord.ApplicationContext, game: DiscordSnakeGame, team_id: int):
     await game.join_game(ctx, team_id)
 
@@ -362,12 +363,17 @@ async def end_game(ctx: discord.ApplicationContext):
     await game_manager.end_game(ctx)
 
 
-settings = bot.create_group("settings")
+settings = bot.create_group("settings", guild_ids=GUILD_IDS)
 
 
 @settings.command()
 @game_manager.game_command
-async def num_challenges(ctx: discord.ApplicationContext, game: DiscordSnakeGame, new_val: Optional[int] = None):
+@discord.option("new_val", int, min_value=1, max_value=5, required=False)
+async def num_challenges(
+    ctx: discord.ApplicationContext,
+    game: DiscordSnakeGame,
+    new_val: Optional[int] = None
+):
     if new_val is None:
         val = await game.get_setting("num_challenges")
         await ctx.respond(f"num_challenges is set to {val}", ephemeral=True)
@@ -377,6 +383,7 @@ async def num_challenges(ctx: discord.ApplicationContext, game: DiscordSnakeGame
 
 @settings.command()
 @game_manager.game_command
+@discord.option("new_val", int, min_value=30, required=False)
 async def cycle_length(ctx: discord.ApplicationContext, game: DiscordSnakeGame, new_val: Optional[int] = None):
     if new_val is None:
         val = await game.get_setting("cycle_length")
