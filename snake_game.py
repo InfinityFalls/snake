@@ -3,10 +3,9 @@ from collections import deque
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, auto
-import itertools
 import logging
 import random
-from typing import Any, Awaitable
+from typing import Any
 from warnings import warn
 import csv
 
@@ -37,8 +36,7 @@ async def _no_method_warning(*_, **__):
 
 @dataclass
 class InterfaceMethods:
-    broadcast_challenges: Callable[[
-        int], Coroutine[Any, Any, None]] = _no_method_warning
+    broadcast_challenges: Callable[[int], Coroutine[Any, Any, None]] = _no_method_warning
     warning_ping: Callable[[], Coroutine[Any, Any, None]] = _no_method_warning
 
 
@@ -169,5 +167,6 @@ def load_challenges():
         for row in csv.DictReader(f):
             challenges.append(Challenge(row["title"], row["description"]))
     logging.info(f"Loaded {len(challenges)} challenges!")
-    
+
+
 load_challenges()

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import functools
 import inspect
 from typing import Any, Awaitable, Optional
-from snake_game import Challenge, SnakeGame, Settings, InterfaceMethods, GameError
+from snake_game import Challenge, SnakeGame, Settings, InterfaceMethods, GameError, load_challenges
 from dotenv import load_dotenv
 import os
 
@@ -390,6 +390,13 @@ async def cycle_length(ctx: discord.ApplicationContext, game: DiscordSnakeGame, 
         await ctx.respond(f"cycle_length is set to {val}", ephemeral=True)
     else:
         await game.set_setting(ctx, "cycle_length", new_val)
+
+
+@bot.command(guild_ids=GUILD_IDS)
+async def reload_challenges(ctx: discord.ApplicationContext):
+    load_challenges()
+    await ctx.respond("Challenges reloaded")
+
 
 
 if __name__ == "__main__":
