@@ -3,8 +3,15 @@ from collections import deque
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, auto
+import itertools
+import logging
+import random
 from typing import Any, Awaitable
 from warnings import warn
+import csv
+
+
+challenges = []
 
 
 class GameError(RuntimeError):
@@ -16,7 +23,7 @@ class Challenge:
     title: str
     description: str
 
-# TODO: Figure out how to store settings in a somewhat sensible way
+
 @dataclass
 class Settings:
     cycle_length: int = 30  # TODO: Change to 120
@@ -30,7 +37,8 @@ async def _no_method_warning(*_, **__):
 
 @dataclass
 class InterfaceMethods:
-    broadcast_challenges: Callable[[int], Coroutine[Any, Any, None]] = _no_method_warning
+    broadcast_challenges: Callable[[
+        int], Coroutine[Any, Any, None]] = _no_method_warning
     warning_ping: Callable[[], Coroutine[Any, Any, None]] = _no_method_warning
 
 
@@ -68,7 +76,7 @@ class SnakeGame:
     @property
     def is_active(self):
         return self._state in (GameState.PLAYING, GameState.PAUSED)
-    
+
     @property
     def has_ended(self):
         return self._state is GameState.ENDED
@@ -90,17 +98,18 @@ class SnakeGame:
         """
         async with self._state_lock:
             if self._state is not GameState.INITIAL:
-                raise GameError("Cannot enter starting state from a state other than INITIAL")
+                raise GameError(
+                    "Cannot enter starting state from a state other than INITIAL")
             self._state = GameState.STARTING
 
     async def start_game(self):
         async with self._state_lock:
             if self._state not in (GameState.INITIAL, GameState.STARTING):
                 raise GameError("Cannot start a game that has not started")
-            
+
             self._challenge_queue.append(self._generate_challenges())
             self._challenge_queue.append(self._generate_challenges())
-            
+
             self._challenge_loop_task = asyncio.create_task(
                 self._challenge_loop())
             self._state = GameState.PLAYING
@@ -132,9 +141,7 @@ class SnakeGame:
             return completed_challenge, next_challenges
 
     def _generate_challenges(self) -> list[Challenge]:
-        # TODO: Generate a challenge cycle
-        warn("Using dummy challenges")
-        return [Challenge(f"Challenge {i + 1}", "Do something lol") for i in range(self._settings.num_challenges)]
+        return random.sample(challenges, k=self._settings.num_challenges)
 
     async def _shift_challenges(self):
         async with self._challenge_lock:
@@ -153,3 +160,14 @@ class SnakeGame:
                 await asyncio.sleep(self._settings.cycle_length)
             await self._shift_challenges()
             await self._interface.broadcast_challenges(self._cycle_id)
+
+
+def load_challenges():
+    global challenges
+    challenges = []
+    with open("challenges.csv", newline='') as f:
+        for row in csv.DictReader(f):
+            challenges.append(Challenge(row["title"], row["description"]))
+    logging.info(f"Loaded {len(challenges)} challenges!")
+    
+load_challenges()

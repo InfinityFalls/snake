@@ -44,7 +44,7 @@ class ChallengeView(discord.ui.View):
     async def disable_view(self) -> None:
         assert self.message is not None
         self.disable_all_items()
-        await self.message.edit(content=self.message.content, view=self)
+        await self.message.edit(view=self)
 
 
 class DiscordSnakeGame:
